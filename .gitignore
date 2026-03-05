@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Environment and credentials
+.env
+.env.local
+.env.production
+!.env.example
+*.key
+*.pem
+*.crt
+config/credentials.json
+config/*.key
+
+# Logs
+logs/*.log
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups
+*.backup
+*.bak
+*.tmp
+
+# Wazuh sensitive data
+wazuh-passwords.txt
+wazuh-install-files.tar
+*.tar
+
+# Reports (may contain sensitive data)
+reports/*.pdf
+reports/*.html
+
+# ═══════════════════════════════════════════════════
+# Development & Internal Files
+# ═══════════════════════════════════════════════════
+
+# Internal development tools, roadmaps, test results
+devtools/
+
+# All logs (operational data)
+logs/
+
+# Generated reports (contain environment-specific data)
+reports/
+
+# Screenshots/branding (may show internal infrastructure)
+branding/
+
+# Test data
+tests/fixtures/sensitive/
+
+# Development artifacts (AI development process, testing, planning docs)
+devtools/
+test_results_*/
+*_context.md
+*_action_plan.md

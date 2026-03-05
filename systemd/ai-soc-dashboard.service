@@ -1,0 +1,35 @@
+[Unit]
+Description=AllysecLabs Security Intelligence Dashboard
+Documentation=https://github.com/allyseclabs/security-intelligence-platform
+After=ai-soc-api.service
+Requires=ai-soc-api.service
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User=soc-admin
+Group=soc-admin
+WorkingDirectory=/home/soc-admin/ai-soc
+Environment=PATH=/home/soc-admin/ai-soc/venv/bin:/usr/bin:/bin
+EnvironmentFile=/home/soc-admin/ai-soc/.env
+ExecStart=/home/soc-admin/ai-soc/venv/bin/streamlit run dashboard.py \
+    --server.port 8501 \
+    --server.headless true \
+    --server.address 0.0.0.0
+
+# Restart policy
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=append:/home/soc-admin/ai-soc/logs/dashboard.log
+StandardError=append:/home/soc-admin/ai-soc/logs/dashboard.log
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/soc-admin/ai-soc/logs
+
+[Install]
+WantedBy=multi-user.target

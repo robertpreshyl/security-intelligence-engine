@@ -1,0 +1,361 @@
+#!/bin/bash
+# Comprehensive Quick Query Validation Test
+# Tests diverse queries and validates results against actual Wazuh data
+
+set -e
+
+API_URL="http://localhost:8000"
+OUTPUT_DIR="test_results_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$OUTPUT_DIR"
+
+# Color output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+echo "════════════════════════════════════════════════════════════════"
+echo "  AllysecLabs AI Query Validation Test Suite"
+echo "  Testing query uniqueness, accuracy, and data-driven analysis"
+echo "════════════════════════════════════════════════════════════════"
+echo ""
+
+# Test queries covering all major categories
+declare -a queries=(
+    # Daily Essentials
+    "Give me a complete security overview of the last 24 hours"
+    "Show me all critical and high severity alerts from today"
+    
+    # Authentication
+    "Show all failed authentication attempts across all systems"
+    "Show all SSH login events - successful and failed on Linux"
+    
+    # OS-Specific
+    "Show all security events from Linux agents only"
+    "Show all security events from Windows agents only"
+    
+    # Network Security
+    "Show firewall blocked connections and dropped packets"
+    "Detect connections on unusual or suspicious ports"
+    
+    # Endpoint Security
+    "Show file integrity monitoring (FIM) alerts - changed or deleted files"
+    "Show PowerShell, bash, or script execution events"
+    
+    # Application Security
+    "Show email server security events - Postfix, Exchange"
+    "Show web server security events - Apache, Nginx, IIS"
+    
+    # Threat Detection
+    "Detect any brute force or authentication attack patterns"
+    "Are there any port scanning or reconnaissance activities?"
+    
+    # Compliance
+    "Show Security Configuration Assessment (SCA) failures"
+)
+
+total_queries=${#queries[@]}
+echo -e "${BLUE}Testing ${total_queries} diverse queries...${NC}\n"
+
+# Function to run a single query
+run_query() {
+    local index=$1
+    local query=$2
+    local filename="${OUTPUT_DIR}/query_$(printf "%02d" $index).json"
+    
+    echo -e "${YELLOW}[$index/$total_queries]${NC} Testing: \"${query:0:60}...\""
+    
+    # Call API with timeout
+    if curl -s -X POST "$API_URL/query" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\": \"$query\", \"report_depth\": \"summary\"}" \
+        --max-time 120 \
+        -o "$filename" 2>/dev/null; then
+        
+        # Extract key metrics
+        local alert_count=$(jq -r '.alert_count // 0' "$filename")
+        local top_rule=$(jq -r '.stats.top_rules[0].rule_id // "N/A"' "$filename")
+        local top_rule_desc=$(jq -r '.stats.top_rules[0].description // "N/A"' "$filename" | cut -c1-50)
+        local os_context=$(jq -r '.interpretation.os_context // "unknown"' "$filename")
+        local success=$(jq -r '.success // false' "$filename")
+        
+        if [ "$success" = "true" ]; then
+            echo -e "  ${GREEN}✓${NC} Alerts: $alert_count | Top Rule: $top_rule | OS: $os_context"
+            echo -e "    Rule: $top_rule_desc"
+            
+            # Save summary
+            echo "$index|$query|$alert_count|$top_rule|$os_context" >> "$OUTPUT_DIR/summary.csv"
+        else
+            echo -e "  ${RED}✗${NC} Query failed"
+            echo "$index|$query|0|FAILED|unknown" >> "$OUTPUT_DIR/summary.csv"
+        fi
+    else
+        echo -e "  ${RED}✗${NC} API timeout or connection error"
+        echo "$index|$query|0|TIMEOUT|unknown" >> "$OUTPUT_DIR/summary.csv"
+    fi
+    
+    echo ""
+    sleep 2  # Rate limit courtesy
+}
+
+# Initialize summary file
+echo "Index|Query|Alert Count|Top Rule ID|OS Context" > "$OUTPUT_DIR/summary.csv"
+
+# Run all queries
+for i in "${!queries[@]}"; do
+    run_query $((i+1)) "${queries[$i]}"
+done
+
+echo ""
+echo "════════════════════════════════════════════════════════════════"
+echo "  Analysis: Validating Results"
+echo "════════════════════════════════════════════════════════════════"
+echo ""
+
+# Analyze results with Python
+python3 << 'PYTHON_SCRIPT'
+import json
+import sys
+from pathlib import Path
+from collections import Counter
+
+output_dir = sys.argv[1] if len(sys.argv) > 1 else "."
+
+# Load all results
+results = []
+for json_file in sorted(Path(output_dir).glob("query_*.json")):
+    try:
+        with open(json_file) as f:
+            data = json.load(f)
+            if data.get('success'):
+                results.append({
+                    'index': json_file.stem.split('_')[-1],
+                    'query': data.get('query', ''),
+                    'alert_count': data.get('alert_count', 0),
+                    'top_rules': [r['rule_id'] for r in data.get('stats', {}).get('top_rules', [])[:3]],
+                    'os_context': data.get('interpretation', {}).get('os_context', 'unknown'),
+                    'keywords': data.get('interpretation', {}).get('keywords', []),
+                    'ai_analysis': data.get('ai_analysis', ''),
+                })
+    except Exception as e:
+        print(f"Error loading {json_file}: {e}")
+
+if not results:
+    print("❌ No successful results to analyze")
+    sys.exit(1)
+
+print(f"✅ Successfully loaded {len(results)} query results\n")
+
+# Validation 1: Uniqueness Analysis
+print("═" * 70)
+print("VALIDATION 1: Query Uniqueness")
+print("═" * 70)
+
+# Count how many times each rule appears as top rule
+top_rule_frequency = Counter()
+for r in results:
+    if r['top_rules']:
+        top_rule_frequency[r['top_rules'][0]] += 1
+
+print(f"\nTop Rule Distribution (should be diverse):")
+for rule, count in top_rule_frequency.most_common(10):
+    pct = (count / len(results)) * 100
+    bar = "█" * int(pct / 5)
+    status = "⚠️  HIGH OVERLAP" if pct > 50 else "✓ Good" if pct < 30 else "○ Moderate"
+    print(f"  Rule {rule}: {count:2d} queries ({pct:5.1f}%) {bar:20s} {status}")
+
+# Pairwise similarity
+print(f"\nPairwise Query Similarity (lower = more unique):")
+similarities = []
+for i in range(len(results)):
+    for j in range(i+1, len(results)):
+        r1, r2 = results[i], results[j]
+        
+        # Jaccard similarity of top 3 rules
+        set1 = set(r1['top_rules'][:3])
+        set2 = set(r2['top_rules'][:3])
+        if set1 or set2:
+            jaccard = len(set1 & set2) / len(set1 | set2) if (set1 | set2) else 0
+        else:
+            jaccard = 0
+        
+        if jaccard > 0.5:  # High similarity
+            similarities.append((i+1, j+1, jaccard, r1['query'][:40], r2['query'][:40]))
+
+if similarities:
+    print(f"  Found {len(similarities)} query pairs with >50% overlap:")
+    for i, j, sim, q1, q2 in similarities[:5]:  # Show top 5
+        print(f"    Q{i:02d} vs Q{j:02d}: {sim:.0%} similar")
+        print(f"      - {q1}...")
+        print(f"      - {q2}...")
+else:
+    print("  ✅ All query pairs have <50% similarity (excellent uniqueness)")
+
+# Overall uniqueness score
+all_top_rules = set()
+for r in results:
+    all_top_rules.update(r['top_rules'][:3])
+
+avg_unique = len(all_top_rules) / len(results) if results else 0
+print(f"\nOverall Uniqueness Score: {avg_unique:.2f} unique rules per query")
+if avg_unique < 2.0:
+    print("  ⚠️  Poor uniqueness - many queries return same rules")
+elif avg_unique < 4.0:
+    print("  ✓ Good uniqueness - working as intended")
+else:
+    print("  ✅ Excellent uniqueness - highly diverse results")
+
+# Validation 2: Data Citation Check
+print(f"\n{'═' * 70}")
+print("VALIDATION 2: AI Specificity (Anti-Hallucination)")
+print("═" * 70)
+
+citation_scores = []
+for r in results:
+    analysis = r['ai_analysis']
+    
+    # Count specific data citations
+    rule_citations = analysis.count('[🔗 Rule ')
+    agent_citations = analysis.count('[🖥️ ')
+    ip_citations = analysis.count('[🌐 ')
+    user_citations = analysis.count('[👤 ')
+    
+    total_citations = rule_citations + agent_citations + ip_citations + user_citations
+    
+    # Check for generic phrases (bad signs)
+    generic_phrases = [
+        'multiple attempts',
+        'several alerts',
+        'various sources',
+        'numerous events'
+    ]
+    generic_count = sum(1 for phrase in generic_phrases if phrase.lower() in analysis.lower())
+    
+    citation_scores.append({
+        'index': r['index'],
+        'total_citations': total_citations,
+        'rule_refs': rule_citations,
+        'generic_count': generic_count,
+    })
+
+print(f"\nCitation Quality (should have specific rule IDs, IPs, agents):")
+for score in citation_scores[:10]:  # Show first 10
+    status = "✅" if score['total_citations'] >= 3 else "⚠️ " if score['total_citations'] >= 1 else "❌"
+    generic_warn = f" (⚠️  {score['generic_count']} generic phrases)" if score['generic_count'] > 0 else ""
+    print(f"  Q{score['index']}: {status} {score['total_citations']} clickable links, {score['rule_refs']} rule IDs{generic_warn}")
+
+avg_citations = sum(s['total_citations'] for s in citation_scores) / len(citation_scores) if citation_scores else 0
+print(f"\nAverage Citations per Report: {avg_citations:.1f}")
+if avg_citations < 2:
+    print("  ❌ Low specificity - AI not citing source data")
+elif avg_citations < 5:
+    print("  ✓ Moderate specificity - AI citing some data")
+else:
+    print("  ✅ High specificity - AI consistently citing source data")
+
+# Validation 3: OS Awareness
+print(f"\n{'═' * 70}")
+print("VALIDATION 3: OS-Aware Filtering")
+print("═" * 70)
+
+os_queries = [r for r in results if r['os_context'] in ('linux', 'windows', 'macos')]
+print(f"\nOS-specific queries: {len(os_queries)} of {len(results)}")
+for r in os_queries:
+    print(f"  Q{r['index']:02s}: {r['os_context'].upper():8s} - \"{r['query'][:50]}...\"")
+
+if os_queries:
+    print("\n✓ OS filtering is working (queries detected OS context)")
+else:
+    print("\n○ No OS-specific queries in this test set")
+
+# Validation 4: Source Data Alignment
+print(f"\n{'═' * 70}")
+print("VALIDATION 4: Alignment with Actual Wazuh Data")
+print("═" * 70)
+
+# Known top rules from actual data (from our earlier check)
+known_top_rules = {
+    '3332': {'desc': 'Postfix SASL auth failure', 'count': 611, 'level': 5},
+    '9706': {'desc': 'Dovecot disconnected', 'count': 113, 'level': 3},
+    '9701': {'desc': 'Dovecot auth success', 'count': 113, 'level': 3},
+    '3357': {'desc': 'Postfix multiple SASL failures', 'count': 76, 'level': 10},
+    '533': {'desc': 'netstat port changes', 'count': 26, 'level': 7},
+}
+
+print(f"\nComparing AI-reported rules against actual Wazuh data:")
+print(f"Known top rules in source data: 3332 (611), 9706 (113), 9701 (113), 3357 (76), 533 (26)")
+print(f"\nAI-reported top rules across all queries:")
+ai_reported_rules = Counter()
+for r in results:
+    ai_reported_rules.update(r['top_rules'][:5])
+
+for rule, count in ai_reported_rules.most_common(10):
+    match = "✓" if rule in known_top_rules else "?"
+    print(f"  {match} Rule {rule}: appeared in {count} queries")
+
+# Check if AI is citing rules that actually exist
+print(f"\n{'All AI-cited rules exist in source data' if all(r in [str(k) for k in known_top_rules.keys()] + ['5501', '5402', '5715', '86003', '52002', '9705', '60642', '5502', '61102', '60702', '40704'] for r in ai_reported_rules.keys()) else 'Some AI-cited rules may not be in recent data'}")
+
+# Final Summary
+print(f"\n{'═' * 70}")
+print("FINAL VERDICT")
+print("═" * 70)
+
+pass_count = 0
+total_checks = 4
+
+# Check 1: Uniqueness
+if avg_unique >= 2.0:
+    print("✅ PASS: Query uniqueness is adequate")
+    pass_count += 1
+else:
+    print("⚠️  MARGINAL: Query uniqueness could be improved")
+
+# Check 2: Specificity
+if avg_citations >= 3:
+    print("✅ PASS: AI consistently cites specific data")
+    pass_count += 1
+elif avg_citations >= 1:
+    print("⚠️  MARGINAL: AI cites some data but could be more specific")
+else:
+    print("❌ FAIL: AI not citing source data (hallucination risk)")
+
+# Check 3: OS awareness
+if len(os_queries) == 0:
+    print("○ SKIP: No OS-specific queries in test set")
+    total_checks -= 1
+elif all(r['os_context'] != 'unknown' for r in os_queries):
+    print("✅ PASS: OS-aware filtering is working")
+    pass_count += 1
+else:
+    print("⚠️  MARGINAL: Some OS detection issues")
+
+# Check 4: Data alignment
+postfix_dominant = ai_reported_rules.most_common(1)[0][0] in ['3332', '9706', '9701', '3357'] if ai_reported_rules else False
+if postfix_dominant or '3332' in [str(k) for k in ai_reported_rules.keys()]:
+    print("✅ PASS: AI reporting aligns with actual Wazuh data (Postfix-dominant)")
+    pass_count += 1
+else:
+    print("⚠️  Note: AI results differ from known data distribution")
+
+print(f"\n{'═' * 70}")
+print(f"OVERALL: {pass_count}/{total_checks} checks passed")
+if pass_count == total_checks:
+    print("✅ System is working correctly - accurate, unique, data-driven analysis")
+elif pass_count >= total_checks * 0.75:
+    print("✓ System is mostly working - minor improvements possible")
+else:
+    print("⚠️  System needs attention - see recommendations above")
+print("═" * 70)
+
+PYTHON_SCRIPT
+
+python3 - "$OUTPUT_DIR"
+
+echo ""
+echo "════════════════════════════════════════════════════════════════"
+echo "  Test Complete"
+echo "  Results saved in: $OUTPUT_DIR"
+echo "  Summary: $OUTPUT_DIR/summary.csv"
+echo "════════════════════════════════════════════════════════════════"

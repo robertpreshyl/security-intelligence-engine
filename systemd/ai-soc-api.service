@@ -1,0 +1,33 @@
+[Unit]
+Description=AllysecLabs Security Intelligence API
+Documentation=https://github.com/allyseclabs/security-intelligence-platform
+After=network-online.target wazuh-manager.service
+Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User=soc-admin
+Group=wazuh
+WorkingDirectory=/home/soc-admin/ai-soc
+Environment=PATH=/home/soc-admin/ai-soc/venv/bin:/usr/bin:/bin
+EnvironmentFile=/home/soc-admin/ai-soc/.env
+ExecStart=/usr/bin/sg wazuh -c "/home/soc-admin/ai-soc/venv/bin/uvicorn api_server:app --host 0.0.0.0 --port 8000"
+
+# Restart policy
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=append:/home/soc-admin/ai-soc/logs/api_server.log
+StandardError=append:/home/soc-admin/ai-soc/logs/api_server.log
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/soc-admin/ai-soc/logs
+ReadOnlyPaths=/var/ossec/logs/alerts
+
+[Install]
+WantedBy=multi-user.target
