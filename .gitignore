@@ -75,3 +75,6 @@ devtools/
 test_results_*/
 *_context.md
 *_action_plan.md
+*.sql
+*.dump
+node_modules/
